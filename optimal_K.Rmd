@@ -1,0 +1,83 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(text2vec)
+library(tidyverse)
+library(data.table)
+library(tidytext)
+library(stm)
+library(furrr)
+plan(multiprocess)
+```
+
+```{r}
+setwd("~/Yale Drive/YALE/03 Year/PLSC455/proj")
+corpus <- fread("corpus20200418.csv")
+  
+corpus <- corpus %>% select(-V1) %>%
+  mutate(text = str_remove_all(.$text, "SINGAPORE| - |SPH Digital News .*|-/TISG .*|TO READ THE FULL ARTICLE .*")) %>% 
+  mutate(text = str_remove_all(.$text, '\"\"|CHANNEL NEWSASIA|"|\\(|\\)|Singapore —|—')) %>%
+  mutate(text = str_replace_all(.$text, "&nbsp;", " "))
+  #dplyr::rename(id = index) %>%
+  #mutate(id = seq(1, nrow(corpus)))
+  
+ST.corpus <- corpus %>% filter(pub == "ST") %>%
+  select(id, text) %>% 
+  unnest_tokens(word, text, token = "tweets") %>%
+  anti_join(get_stopwords()) %>%
+  filter(!str_detect(word, "[0-9]+")) %>%
+  add_count(word) %>%
+  filter(n > 50) %>%
+  select(-n)
+
+
+
+ST.sparse <- ST.corpus %>%
+  count(id, word) %>%
+  cast_sparse(id, word, n)
+
+many_models_2 <- data_frame(K = c(10, 30, 50, 70)) %>%
+  mutate(topic_model = future_map(K, ~stm(ST.sparse, K = .,
+                                          verbose = FALSE)))
+
+heldout <- make.heldout(ST.sparse)
+
+k_result <- many_models_2 %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, ST.sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, ST.sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result
+
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "ST")
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file).

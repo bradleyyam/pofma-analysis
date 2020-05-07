@@ -1,0 +1,149 @@
+---
+title: "topic_modelling"
+author: "Bradley Yam"
+date: "5/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(text2vec)
+library(tidyverse)
+library(data.table)
+library(tidytext)
+library(stm)
+library(furrr)
+library(textstem)
+library(LDAvis)
+plan(multiprocess)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r TODAY}
+setwd("~/Yale Drive/YALE/03 Year/PLSC455/proj")
+corpus <- fread("corpus20200418.csv")
+  
+corpus <- corpus %>% select(-V1) %>%
+  mutate(text = str_remove_all(.$text, "SINGAPORE| - |SPH Digital News .*|-/TISG .*|TO READ THE FULL ARTICLE .*")) %>% 
+  mutate(text = str_remove_all(.$text, '\"\"|CHANNEL NEWSASIA|"|\\(|\\)|Singapore —|—')) %>%
+  mutate(text = str_replace_all(.$text, "&nbsp;", " "))
+
+prep = function(x) {
+  # make text lower case
+  x = str_to_lower(x)
+  # remove non-alphanumeric symbols
+  x = str_replace_all(x, "[^[:alpha:]]", " ")
+  # collapse multiple spaces
+  x = str_replace_all(x, "\\s+", " ")
+  # lemmatize
+  x = textstem::lemmatize_strings(x)
+}
+
+get_topics <- function(x){
+  order(x, decreasing = TRUE)[1]
+}
+
+tokens <- prep(corpus$text)
+tokens_word <- word_tokenizer(tokens)
+it <- itoken(tokens_word, ids = corpus$id, progressbar = TRUE)
+
+vocab <- create_vocabulary(it)
+vocab <- prune_vocabulary(vocab, doc_proportion_max = 0.1, term_count_min = 10)
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer, type = "dgTMatrix") 
+
+lda_model160 <- LDA$new(n_topics = 160, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr160 <- lda_model160$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+lda_model160$plot()
+
+topics <- apply(doc_topic_distr160, 1, get_topics)
+corpus$topics <- as.integer(topics)
+
+corpus %>% filter(topics == 3) %>%
+  select(title)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r IND}
+corpus <- fread("corpus20200418.csv")
+  
+corpus.ind <- corpus %>% select(-V1) %>%
+  mutate(text = str_remove_all(.$text, "SINGAPORE| - |SPH Digital News .*|-/TISG .*|TO READ THE FULL ARTICLE .*")) %>% 
+  mutate(text = str_remove_all(.$text, '\"\"|CHANNEL NEWSASIA|"|\\(|\\)|Singapore —|—')) %>%
+  mutate(text = str_replace_all(.$text, "&nbsp;", " ")) %>%
+  filter(pub == "IND")
+
+tokens <- prep(corpus.ind$text)
+tokens_word <- word_tokenizer(tokens)
+it <- itoken(tokens_word, ids = corpus.ind$id, progressbar = TRUE)
+
+vocab <- create_vocabulary(it)
+vocab <- prune_vocabulary(vocab, doc_proportion_max = 0.1, term_count_min = 5)
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer, type = "dgTMatrix") 
+
+lda_model150.ind <- LDA$new(n_topics = 150, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr150.ind <- lda_model150.ind$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+lda_model150.ind$plot()
+
+lda_model50.ind <- LDA$new(n_topics = 50, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr50.ind <- lda_model50.ind$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+lda_model50.ind$plot()
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r IND}
+corpus <- fread("corpus20200418.csv")
+  
+corpus.st <- corpus %>% select(-V1) %>%
+  mutate(text = str_remove_all(.$text, "SINGAPORE| - |SPH Digital News .*|-/TISG .*|TO READ THE FULL ARTICLE .*")) %>% 
+  mutate(text = str_remove_all(.$text, '\"\"|CHANNEL NEWSASIA|"|\\(|\\)|Singapore —|—')) %>%
+  mutate(text = str_replace_all(.$text, "&nbsp;", " ")) %>%
+  filter(pub == "ST")
+
+tokens <- prep(corpus.st$text)
+tokens_word <- word_tokenizer(tokens)
+it <- itoken(tokens_word, ids = corpus.st$id, progressbar = TRUE)
+
+vocab <- create_vocabulary(it)
+vocab <- prune_vocabulary(vocab, doc_proportion_max = 0.1, term_count_min = 50)
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer, type = "dgTMatrix") 
+
+lda_model150.st <- LDA$new(n_topics = 150, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr150.st <- lda_model150.st$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+lda_model150.st$plot()
+
+lda_model50.st <- LDA$new(n_topics = 50, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr50.st <- lda_model50.st$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+lda_model50.st$plot()
+
+
+```

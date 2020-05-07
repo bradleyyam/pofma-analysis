@@ -1,0 +1,128 @@
+---
+title: "plsc455"
+author: "Bradley Yam"
+date: "2/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rvest)
+library(rjson)
+library(jsonlite)
+library(stringr)
+library(purrr)
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+
+dates <- seq(as.Date("2019/1/1"), as.Date("2019/12/31"), "days")
+dates <- gsub("-", "", dates)
+headlines <- c()
+
+for (i in 1:length(dates)){
+  url <- paste('https://web.archive.org/web/', dates[i],'/https://www.straitstimes.com/singapore', sep = "")
+  print(url)
+  results <- read_html(url)
+  headlines <- c(headlines, results %>% html_nodes(".story-headline a") %>% html_attr('href'))
+}
+
+u_headlines <- unique(headlines)
+unique_dates <- str_extract(u_headlines, "/web/[0-9]{8}") %>% str_replace("/web/", "")
+u_headlines <- cbind(as.character(u_headlines), as.numeric(unique_dates), as.character(c(rep(0, length(u_headlines)))))
+
+headlines_ind <- c()
+
+for(i in 1:800){
+  url <- paste("http://theindependent.sg/news/singapore/page/", i, "/", sep = "")
+  results <- safely(read_html, "503")(url)
+  if(results$result[1] == "503"){
+    print("skip")
+    print(i)
+    next
+  } else {
+    headlines_ind <- c(headlines_ind, results$result %>% html_nodes("h3 a") %>% html_attr('href'))
+  }
+}
+
+u_headlines_ind <- unique(headlines_ind)
+
+ind_news <- cbind(headlines_ind, rep(0,nrow(ind_links)), rep(0,nrow(ind_links)), rep(0,nrow(ind_links)), rep(0,nrow(ind_links)))
+
+for (i in 3941:nrow(ind_news)){
+  link <- ind_news[i,2]
+  results <- safely(read_html, NA)(link)
+  if(is.na(results$result)){next}
+  date <- results$result %>% html_nodes(".td-module-date") %>% html_attr("datetime")
+  author <- results$result %>% html_nodes(".tdb-author-name") %>% html_text()
+  title <- results$result %>% html_nodes(".tdb-title-text") %>% html_text()
+  text <- results$result %>% html_nodes(".td-fix-index p") %>% html_text()
+  text <- paste(text, collapse = " ")
+  if(length(date) != 0) {ind_news[i,3] <- date}
+  if(length(text) != 0) {ind_news[i,4] <- text}
+  if(length(title) != 0) {ind_news[i,5] <- title[1]}
+  if(length(author) != 0) {ind_news[i,6] <- author[1]}
+  if(i %% 10 == 0) {print(i)}
+}
+
+link <- ind_news[i,2]
+date <- read_html(link) %>% html_nodes(".td-module-date") %>% html_attr("datetime")
+author <- read_html(link) %>% html_nodes(".tdb-author-name") %>% html_text()
+title <- read_html(link) %>% html_nodes(".tdb-title-text") %>% html_text()
+text <- read_html(link) %>% html_nodes(".td-fix-index p") %>% html_text()
+text <- paste(text, collapse = " ")
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r}
+scrape_news <- function(u_headlines_row){
+  link = paste('https://web.archive.org', u_headlines_row[1], sep = "")
+  text = read_html(link) %>% html_nodes("p") %>% html_text()
+  return(paste(text[1], text[2], text[3], text[4], text[5]))
+}
+
+scrape_news <- possibly(.f = scrape_news, otherwise = NA_real_, quiet = T)
+
+#run later
+u_headlines[1:500,3] <- apply(u_headlines[1:500,], 1, scrape_news)
+u_headlines[501:nrow(u_headlines),3] <- apply(u_headlines[501:nrow(u_headlines),], 1, scrape_news)
+
+for (i in 2168:nrow(u_headlines)){
+  link <- paste('https://web.archive.org', u_headlines[i,2], sep = "")
+  text <- read_html(link) %>% html_nodes("p") %>% html_text()
+  u_headlines[i,4] <- paste(text[1], text[2], text[3], text[4], text[5])
+}
+
+today1 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=1&items=1000")
+today2 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=2&items=1000")
+today3 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=3&items=1000")
+today4 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=4&items=1000")
+today5 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=5&items=1000")
+today6 <- fromJSON("https://www.todayonline.com/api/v3/news_feed/3?&page=6&items=1000")
+
+
+parser <- function(x){
+  y <- x$nodes$node %>% select(node_url, publication_date, body, title, author, source) %>%
+    mutate(Index = seq(i*1000+1, i*1000+1000) %>%
+    mutate(author_c = unlist(lapply(author, function(x) ifelse(length(x) > 0, x[1,1], 0)))) %>%
+    mutate(date = gsub("-", "", substr(publication_date, 0, 10))) %>%
+    mutate(body = gsub("<[^>]*>", "", .$body)) %>%
+    mutate(body = gsub("[\r\t\n]+", " ", .$body)) %>%
+    mutate(body = gsub("SINGAPORE — ", "", .$body)) %>%
+    mutate(source = gsub("Channel NewsAsia", "TODAY", .$source)) %>%
+    select(Index, node_url, date, body, title, author_c, source) %>%
+    rename(c(node_url = "URL", date = "Date", body = "Text", title = "Title", author_c = "Author", source = "Publication"))
+    return(y)}
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

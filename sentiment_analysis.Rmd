@@ -1,0 +1,43 @@
+---
+title: "sentiment_analysis"
+author: "Bradley Yam"
+date: "5/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(vader)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r sa}
+getVaderScore <- function(x){
+  l <- getVader(x)
+  return(l['compound'])
+}
+
+setwd("~/Yale Drive/YALE/03 Year/PLSC455/proj")
+corpus <- fread("corpus20200418.csv")
+  
+corpus <- corpus %>% select(-V1) %>%
+  mutate(text = str_remove_all(.$text, "SINGAPORE| - |SPH Digital News .*|-/TISG .*|TO READ THE FULL ARTICLE .*")) %>% 
+  mutate(text = str_remove_all(.$text, '\"\"|CHANNEL NEWSASIA|"|\\(|\\)|Singapore —|—')) %>%
+  mutate(text = str_replace_all(.$text, "&nbsp;", " "))
+
+corpus$scores <- rep(0, nrow(corpus)) 
+#lapply(corpus$text, getVaderScore)
+
+for(i in 1:nrow(corpus)){
+  corpus$scores[i] <- tryCatch(getVaderScore(corpus$text[i]),error = function(e) return(NA))
+  if (i %% 1E2 == 0) {print(paste("done: ", i))}
+}
+
+```
+
+

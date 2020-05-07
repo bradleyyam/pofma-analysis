@@ -1,0 +1,1185 @@
+---
+title: "data_analysis"
+author: "Bradley Yam"
+date: "5/6/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+library(tidyverse)
+library(data.table)
+library(tidytext)
+library(ineq)
+library(ggplot2)
+library(ggpubr)
+library(text2vec)
+library(stm)
+library(furrr)
+library(textstem)
+library(LDAvis)
+plan(multiprocess)
+
+setwd("~/Yale Drive/YALE/03 Year/PLSC455/proj")
+corpus1 <- fread("corpus20200508.csv") %>% select(-V1)
+
+prep = function(x) {
+  # make text lower case
+  x = str_to_lower(x)
+  # remove non-alphanumeric symbols
+  x = str_replace_all(x, "[^[:alpha:]]", " ")
+  # collapse multiple spaces
+  x = str_replace_all(x, "\\s+", " ")
+  # lemmatize
+  x = textstem::lemmatize_strings(x)
+}
+
+tokens <- prep(corpus1$text)
+tokens_word <- word_tokenizer(tokens)
+it <- itoken(tokens_word, ids = corpus1$id, progressbar = TRUE)
+
+vocab <- create_vocabulary(it)
+vocab <- prune_vocabulary(vocab, doc_proportion_max = 0.1, term_count_min = 10)
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer, type = "dgTMatrix") 
+
+lda_model160 <- LDA$new(n_topics = 160, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr160 <- lda_model160$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+trends <- corpus1 %>% filter(!is.na(scores)) %>% 
+  group_by(date) %>%
+  summarise(mean = mean(scores),
+            gini = ineq(scores + 1, type = "Gini"))
+
+ggplot(data = trends, aes(x = date)) +
+  geom_line(aes(y=mean, group = 1, color = "mean")) +
+  geom_line(aes(y=gini, group = 1, color = "gini")) + xlab("date") + ylab("mean and gini of scores") + scale_color_manual(name = "", values = c("mean" = "darkred", "gini" = "blue"))
+
+corpus.2019 <- corpus1 %>% filter(substring(date, 1, 4) == "2019") %>%
+  filter(!is.na(scores))
+
+corpus.all <- corpus1 %>% filter(!is.na(scores))
+
+tokens <- prep(corpus1$text)
+tokens_word <- word_tokenizer(tokens)
+it <- itoken(tokens_word, ids = corpus1$id, progressbar = TRUE)
+
+vocab <- create_vocabulary(it)
+vocab <- prune_vocabulary(vocab, doc_proportion_max = 0.1, term_count_min = 10)
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer, type = "dgTMatrix") 
+
+lda_model160 <- LDA$new(n_topics = 160, doc_topic_prior = 0.1, topic_word_prior = 0.01)
+doc_topic_distr160 <- lda_model160$fit_transform(x = dtm, n_iter = 1000, 
+                          convergence_tol = 0.001, n_check_convergence = 25, 
+                          progressbar = FALSE)
+
+```
+
+```{r topics 2019, 5 May}
+
+before.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 508) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 508) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$topics, after.mean$topics)
+before <- before.mean %>% filter(topics %in% diff)
+after <- after.mean %>% filter(topics %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 508) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 508) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$topics, after.gini$topics)
+before <- before.gini %>% filter(topics %in% diff)
+after <- after.gini %>% filter(topics %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Scores over Topics")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Scores over Topics")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r topics all, 5 May}
+
+before.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20190508) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20190508) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$topics, after.mean$topics)
+before <- before.mean %>% filter(topics %in% diff)
+after <- after.mean %>% filter(topics %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20190508) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20190508) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$topics, after.gini$topics)
+before <- before.gini %>% filter(topics %in% diff)
+after <- after.gini %>% filter(topics %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Scores over Topics")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Scores over Topics")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r author 2019, 5 May}
+
+before.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 508) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 508) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 508) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 508) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r author all, 5 May}
+
+before.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20190508) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20190508) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20190508) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20190508) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r topics 2019, 2 Oct}
+
+before.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$topics, after.mean$topics)
+before <- before.mean %>% filter(topics %in% diff)
+after <- after.mean %>% filter(topics %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$topics, after.gini$topics)
+before <- before.gini %>% filter(topics %in% diff)
+after <- after.gini %>% filter(topics %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Scores over Topics")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Scores over Topics")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r topics all, balanced, 2 Oct}
+
+before.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(topics) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$topics, after.mean$topics)
+before <- before.mean %>% filter(topics %in% diff)
+after <- after.mean %>% filter(topics %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(topics) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$topics, after.gini$topics)
+before <- before.gini %>% filter(topics %in% diff)
+after <- after.gini %>% filter(topics %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco",
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Scores over Topics")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Scores over Topics")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r author 2019, 2 Oct}
+
+before.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.2019 %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r author all, balanced, 2 Oct}
+
+before.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r author all, unbalanced, 2 Oct}
+
+before.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.all %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r govt + author all + chosen topics, 2 Oct, eval = FALSE}
+gov.words <- c("politic", "pofma", "cpf", "heng", "swee", "keat", "halimah", "pap", "workers", "party", "opposition", "election", "vote", "contest", "parliament", "moh", "mom", "moe", "mas", "mindef", "saf", "policy", "mha", "mci", "mccy", "mof", "hsien", "minlaw", "mnd", "mewr", "mot", "pmo", "minister", "cabinet", "nparks", "subsidy", "merdeka")
+
+topic.sample <- lda_model160$get_top_words(n = 20, topic_number = c(1:160), lambda = 0.5)
+
+gov.topics.byword <- c()
+
+for (i in 1:160){
+  if(sum(gov.words %in% topic.sample[,i]) > 0){
+    gov.topics.byword <- c(gov.topics.byword, i)
+  }
+}
+
+gov.topics.chosen <- c(13, 63, 45, 26, 28, 30, 136, 29, 34, 58, 129, 155, 70, 123, 86, 19, 100, 81, 44)
+
+corpus.govt <- corpus1 %>% filter(topics %in% gov.topics.chosen) %>% filter(!is.na(scores))
+
+before.mean <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+```{r govt + author all + byword, 2 Oct}
+gov.words <- c("politic", "pofma", "cpf", "heng", "swee", "keat", "halimah", "pap", "workers", "party", "opposition", "election", "vote", "contest", "parliament", "moh", "mom", "moe", "mas", "mindef", "saf", "policy", "mha", "mci", "mccy", "mof", "hsien", "minlaw", "mnd", "mewr", "mot", "pmo", "minister", "cabinet", "nparks", "subsidy", "merdeka")
+
+topic.sample <- lda_model160$get_top_words(n = 20, topic_number = c(1:160), lambda = 0.5)
+
+gov.topics.byword <- c()
+
+for (i in 1:160){
+  if(sum(gov.words %in% topic.sample[,i]) > 0){
+    gov.topics.byword <- c(gov.topics.byword, i)
+  }
+}
+
+gov.topics.chosen <- c(13, 63, 45, 26, 28, 30, 136, 29, 34, 58, 129, 155, 70, 123, 86, 19, 100, 81, 44)
+
+corpus.govt <- corpus1 %>% filter(topics %in% gov.topics.byword) %>% filter(!is.na(scores))
+
+before.mean <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.govt %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r govt + author balanced, 2 Oct robustness check, eval = FALSE}
+gov.words <- c("politic", "pofma", "cpf", "heng", "swee", "keat", "halimah", "pap", "workers", "party", "opposition", "election", "vote", "contest", "parliament", "moh", "mom", "moe", "mas", "mindef", "saf", "policy", "mha", "mci", "mccy", "mof", "hsien", "minlaw", "mnd", "mewr", "mot", "pmo", "minister", "cabinet", "nparks", "subsidy", "merdeka")
+
+topic.sample <- lda_model160$get_top_words(n = 20, topic_number = c(1:160), lambda = 0.5)
+
+gov.topics.byword <- c()
+
+for (i in 1:160){
+  if(sum(gov.words %in% topic.sample[,i]) > 0){
+    gov.topics.byword <- c(gov.topics.byword, i)
+  }
+}
+
+gov.topics.chosen <- c(13, 63, 45, 26, 28, 30, 136, 29, 34, 58, 129, 155, 70, 123, 86, 19, 100, 81, 44)
+
+corpus.govt <- corpus1 %>% filter(topics %in% gov.topics.chosen) %>% filter(!is.na(scores)) %>% filter(as.integer(substring(date, 1, 4)) == 2018)
+
+before.mean <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  filter(as.integer(substring(date, 5, 8)) > 601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  filter(as.integer(substring(date, 5, 8)) > 601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+```{r govt + author all + byword, balanced, 2 Oct robustness check}
+gov.words <- c("politic", "pofma", "cpf", "heng", "swee", "keat", "halimah", "pap", "workers", "party", "opposition", "election", "vote", "contest", "parliament", "moh", "mom", "moe", "mas", "mindef", "saf", "policy", "mha", "mci", "mccy", "mof", "hsien", "minlaw", "mnd", "mewr", "mot", "pmo", "minister", "cabinet", "nparks", "subsidy", "merdeka")
+
+topic.sample <- lda_model160$get_top_words(n = 20, topic_number = c(1:160), lambda = 0.5)
+
+gov.topics.byword <- c()
+
+for (i in 1:160){
+  if(sum(gov.words %in% topic.sample[,i]) > 0){
+    gov.topics.byword <- c(gov.topics.byword, i)
+  }
+}
+
+gov.topics.chosen <- c(13, 63, 45, 26, 28, 30, 136, 29, 34, 58, 129, 155, 70, 123, 86, 19, 100, 81, 44)
+
+corpus.govt <- corpus1 %>% filter(topics %in% gov.topics.byword) %>% filter(!is.na(scores)) %>% filter(as.integer(substring(date, 1, 4)) == 2018)
+
+before.mean <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  filter(as.integer(substring(date, 5, 8)) > 601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) < 1002) %>%
+  filter(as.integer(substring(date, 5, 8)) > 601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.govt %>% filter(as.integer(substring(date, 5, 8)) > 1002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Mean") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Gini") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
+```{r govt + author 2019, 2 Oct}
+corpus.govt.2019 <- corpus.2019 %>% filter(topics %in% c(13, 63, 45, 26, 28, 30, 136, 29, 34, 58)) %>% filter(!is.na(scores))
+
+before.mean <- corpus.govt.2019 %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.govt.2019 %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.govt.2019 %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  filter(as.integer(substring(date, 1, 8)) > 20190601) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.govt.2019 %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+```{r rel + author 2019, 2 Oct}
+corpus.rel.2019 <- corpus.2019 %>% filter(topics %in% c(66)) %>% filter(!is.na(scores))
+
+before.mean <- corpus.rel.2019 %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "before")
+
+after.mean <- corpus.rel.2019 %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = mean(scores)) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.mean$author, after.mean$author)
+before <- before.mean %>% filter(author %in% diff)
+after <- after.mean %>% filter(author %in% diff)
+test.mean <- rbind(before, after) %>% mutate(metric = "mean")
+
+before.gini <- corpus.rel.2019 %>% filter(as.integer(substring(date, 1, 8)) < 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "before")
+
+after.gini <- corpus.rel.2019 %>% filter(as.integer(substring(date, 1, 8)) > 20191002) %>%
+  group_by(author) %>%
+  summarise(scores = ineq(scores + 1, type = "Gini")) %>%
+  mutate(period = "after")
+
+diff <- intersect(before.gini$author, after.gini$author)
+before <- before.gini %>% filter(author %in% diff)
+after <- after.gini %>% filter(author %in% diff)
+test.gini <- rbind(before, after) %>% mutate(metric = "gini")
+
+test <- rbind(test.mean, test.gini)
+
+p1 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p1 + stat_compare_means(method = "t.test")
+
+p2 <- ggplot(test, aes(period, scores)) +
+  geom_boxplot(aes(color = period)) +
+  facet_wrap(~metric) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800"))
+p2 + stat_compare_means(method = "wilcox.test")
+
+p3 <- ggpaired(test %>% filter(metric == "mean"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE) + xlab("Period") + ylab("Mean Scores over Authors")
+
+p3 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+p4 <- ggpaired(test %>% filter(metric == "gini"), x = "period", y = "scores",
+          color = "period", palette = "jco", 
+          line.color = "gray", line.size = 0.4, short.panel.labs = FALSE)  + xlab("Period") + ylab("Gini Scores over Authors")
+
+p4 + stat_compare_means(method = "wilcox.test", paired = TRUE)
+
+s.gini.t <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "t.test") %>% mutate(metric = "gini")
+s.mean.t <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "t.test") %>% mutate(metric = "mean")
+s.gini.w <- compare_means(scores ~ period, test %>% filter(metric == "gini"), method = "wilcox.test") %>% mutate(metric = "gini")
+s.mean.w <- compare_means(scores ~ period, test %>% filter(metric == "mean"), method = "wilcox.test") %>% mutate(metric = "mean")
+
+s <- rbind(s.gini.t, s.gini.w, s.mean.t, s.mean.w)
+
+s
+```
+
